@@ -1,0 +1,32 @@
+<mujoco model="bottle_visual_object">
+  <asset>
+    <!-- Preprocessed from uploaded bottle STL: millimeters -> meters, xy-centered, bottom z=0. -->
+    <mesh name="bottle_mesh" file="../meshes/bottle_visual_m.stl"/>
+    <material name="bottle_mat" rgba="0.1 0.35 0.9 1" specular="0.35" shininess="0.4"/>
+  </asset>
+
+  <worldbody>
+    <body>
+      <body name="object">
+        <geom name="bottle_visual" type="mesh" mesh="bottle_mesh" material="bottle_mat"
+              contype="0" conaffinity="0" group="1"/>
+
+        <!-- Bright debug visual proxy. Remove later after confirming placement. -->
+        <!-- <geom name="bottle_debug_visual_cylinder" type="cylinder"
+              pos="0 0 0.030" size="0.075 0.035"
+              contype="0" conaffinity="0" group="0"
+              rgba="0.05 0.35 1 1"/> -->
+
+        <!-- Simple collision proxy based on uploaded STL bounds: diameter ~=0.135 m, height ~=0.051 m. -->
+        <geom name="bottle_collision" type="cylinder" pos="0 0 0.0255" size="0.0675 0.0255"
+              rgba="0.1 0.1 0.1 0.0" density="80" friction="1.2 0.01 0.001"
+              solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
+
+        <site name="bottle_center" pos="0 0 0.0255" size="0.008" rgba="0 1 0 1"/>
+      </body>
+      <site name="bottom_site" pos="0 0 0" size="0.005" rgba="0 0 0 0"/>
+      <site name="top_site" pos="0 0 0.051" size="0.005" rgba="0 0 0 0"/>
+      <site name="horizontal_radius_site" pos="0.080 0 0.0255" size="0.005" rgba="0 0 0 0"/>
+    </body>
+  </worldbody>
+</mujoco>

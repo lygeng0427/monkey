@@ -1,0 +1,6 @@
+# Tested target stack. robosuite/robomimic versions can be pinned tighter later.
+robosuite>=1.5.0
+mujoco>=3.2.0
+trimesh>=4.0.0
+numpy
+h5py
