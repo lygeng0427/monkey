@@ -52,7 +52,7 @@ class FrankaBottleUntwist(ManipulationEnv):
         reward_scale=1.0,
         reward_shaping=False,
         success_thresh=np.pi / 2.0,
-        placement_xy=(0.05, 0.0),
+        placement_xy=(0.10, 0.0),
         has_renderer=False,
         has_offscreen_renderer=True,
         render_camera="frontview",
@@ -144,6 +144,10 @@ class FrankaBottleUntwist(ManipulationEnv):
         self.cap_qpos_addr = self.sim.model.get_joint_qpos_addr(self.cap_joint)
         self.cap_site_id = self.sim.model.site_name2id(
             find_name(self.sim.model.site_names, "cap_site")
+        )
+        # Reference at one cap tab/handle (rotates with the cap) for grasping.
+        self.tab_site_id = self.sim.model.site_name2id(
+            find_name(self.sim.model.site_names, "tab_site")
         )
 
     # ----------------------------------------------------------------- helpers

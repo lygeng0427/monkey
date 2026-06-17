@@ -51,7 +51,7 @@ class FrankaDrawerOpen(ManipulationEnv):
         use_object_obs=True,
         reward_scale=1.0,
         reward_shaping=False,
-        success_thresh=0.10,
+        success_thresh=0.18,
         placement_xy=(0.05, 0.0),
         has_renderer=False,
         has_offscreen_renderer=True,

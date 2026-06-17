@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 """Collect scripted FrankaBottleUntwist demonstrations.
 
-Hardcoded trajectory (top-down press on the cap, then rotate the wrist about the
-world z-axis to spin the cap on its hinge):
+Non-prehensile trajectory (no grasping): the gripper is kept CLOSED the whole
+time and used as a finger. It is placed in a valley just behind ONE of the cap's
+tabs and pushes that single tab around, spinning the cap on its hinge:
 
-    1. move above the cap (gripper open)
-    2. descend onto the cap (gripper open)
-    3. close the gripper onto the cap brim
-    4. press down + rotate the wrist (drz) until success
-       -- if the wrist runs out of travel before the cap is turned far enough,
-          release, counter-rotate the wrist, regrasp, and twist again (a ratchet)
+    1. (gripper closed) move above the valley just behind the target tab
+    2. descend hard into the valley, beside the tab (resting near the body top)
+    3. push the tab around an arc about the cap center until the cap turns past
+       the success angle
 
+Key detail (avoids slipping to the next tab): the hand's commanded angle is
+locked to the MEASURED cap angle -- `hand_angle = tab_angle0 + cap_angle + DRIVE`.
+Because `cap_angle` only advances when the cap actually turns, the hand can never
+run ahead of the tab it is pushing; `DRIVE` (< the 45 deg tab spacing) keeps it
+pressed against that one tab. (An open-loop sweep at a fixed rate outruns the cap
+and skips to the next tab -- that was the bug.)
+
+The cap mesh has 8 flat radial tabs at its brim, modelled in collision (a small
+`cap_core` + 8 `cap_petal_*`), so the closed hand drops into a valley and pushes a
+single tab. `tab_site` marks that tab; `cap_site` is the cap center (arc pivot).
 Saves a robomimic-style HDF5. Run from the project root:
 
     python scripts/collect_bottle_demos.py --out data/bottle.hdf5 --n 10
@@ -33,44 +42,45 @@ ENV_NAME = "FrankaBottleUntwist"
 HORIZON = 2500
 CONTROL_FREQ = 20
 
-TWIST_RATE = 0.6          # per-step wrist rotation command about world z
-TWIST_STEPS = 60          # steps per twist before re-grasping
-MAX_RATCHETS = 6          # max twist/regrasp cycles
+PUSH_RADIUS = 0.059       # arc radius (the cap tab ring radius)
+PUSH_Z = -0.03            # eef z offset vs cap_site: drive the closed hand down into the valley
+LEAD = 0.32               # start this many radians behind the target tab (in the valley)
+DRIVE = 0.33              # hold the hand this many radians ahead of the (moving) tab to push it
+DESCEND_STEPS = 120       # steps to drive the hand down into the valley beside the tab
+MAX_PUSH_STEPS = 340      # cap on the push
 
 
 def generate_episode(env, render=False, noise_scale=0.0):
     rec = Recorder(env, render=render)
+    sim = env.sim
 
-    cap_id = env.cap_site_id
-    cap_pos = lambda: np.array(env.sim.data.site_xpos[cap_id])
-    jitter = np.random.normal(scale=noise_scale, size=3)
+    c = np.array(sim.data.site_xpos[env.cap_site_id])   # cap center (fixed; only the cap spins)
+    cx, cy, cz = float(c[0]), float(c[1]), float(c[2])
+    push_z = cz + PUSH_Z
+    jit = np.random.normal(scale=noise_scale, size=2)
 
-    # 1) above the cap, gripper open
-    rec.reach(cap_pos, jitter + [0.0, 0.0, 0.10], gripper=-1.0, n_steps=60)
-    # 2) descend onto the cap
-    rec.reach(cap_pos, jitter + [0.0, 0.0, 0.015], gripper=-1.0, n_steps=80)
-    # 3) close onto the cap
-    rec.reach(cap_pos, [0.0, 0.0, 0.015], gripper=1.0, n_steps=30)
+    t = np.array(sim.data.site_xpos[env.tab_site_id])
+    tab_ang0 = np.arctan2(t[1] - cy, t[0] - cx)         # initial angle of the target tab
+    cap_a0 = float(env._cap_angle)
 
-    # 4) press + twist, ratcheting (release / counter-rotate / regrasp) if needed
-    for _ in range(MAX_RATCHETS):
-        done = rec.reach_until(
-            pos_fn=cap_pos,
-            offset=[0.0, 0.0, 0.012],          # press down slightly for friction
-            gripper=1.0,
-            max_steps=TWIST_STEPS,
-            success_fn=env._check_success,
-            rot=[0.0, 0.0, TWIST_RATE],        # rotate wrist about world z
-        )
-        if done:
+    def arc(angle, dz=0.0):
+        return [cx + jit[0] + PUSH_RADIUS * np.cos(angle),
+                cy + jit[1] + PUSH_RADIUS * np.sin(angle),
+                push_z + dz]
+
+    # 1) above the valley just behind the target tab, gripper CLOSED from the start
+    for _ in range(40):
+        rec.servo(arc(tab_ang0 - LEAD, dz=0.12), gripper=1.0)
+    # 2) drive down hard into the valley, beside the tab
+    for _ in range(DESCEND_STEPS):
+        rec.servo(arc(tab_ang0 - LEAD), gripper=1.0)
+    # 3) push that ONE tab: keep the hand DRIVE rad ahead of the *measured* cap angle, so it
+    #    tracks the same tab (never outruns it to the next one), until the cap turns enough
+    for _ in range(MAX_PUSH_STEPS):
+        cap_a = float(env._cap_angle) - cap_a0
+        rec.servo(arc(tab_ang0 + cap_a + DRIVE), gripper=1.0)
+        if env._check_success():
             break
-        # Release and lift.
-        rec.reach(cap_pos, [0.0, 0.0, 0.06], gripper=-1.0, n_steps=25)
-        # Counter-rotate the wrist back while lifted and open.
-        rec.reach(cap_pos, [0.0, 0.0, 0.06], gripper=-1.0, n_steps=40, rot=[0.0, 0.0, -TWIST_RATE])
-        # Descend and regrasp.
-        rec.reach(cap_pos, [0.0, 0.0, 0.015], gripper=-1.0, n_steps=40)
-        rec.reach(cap_pos, [0.0, 0.0, 0.015], gripper=1.0, n_steps=25)
 
     return rec.episode(success=env._check_success())
 
@@ -81,7 +91,7 @@ def main():
     p.add_argument("--n", type=int, default=10)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--render", action="store_true")
-    p.add_argument("--noise-scale", type=float, default=0.0, help="Std of per-episode approach jitter (m).")
+    p.add_argument("--noise-scale", type=float, default=0.0, help="Std of per-episode push-position jitter (m).")
     p.add_argument("--keep-failures", action="store_true")
     args = p.parse_args()
 

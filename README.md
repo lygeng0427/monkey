@@ -59,12 +59,14 @@ Two articulated task environments build on the static scene (the static
 
 - **`FrankaDrawerOpen`** — `assets/objects/drawer_articulated.xml`: the CAD drawer
   mesh slides out of a primitive cabinet on a slide joint (a grasp handle is added
-  as a primitive, since the CAD handle is a flush recess). Success = slide distance
-  past a threshold.
+  as a primitive, since the CAD handle is a flush recess). The object is scaled 2×
+  so the grasp is easy to see. Success = slide distance past a threshold.
 - **`FrankaBottleUntwist`** — `assets/objects/bottle_articulated.xml`: the cap
-  rotates about the vertical axis on a hinge joint. The bottle is rescaled (~0.45×,
-  via `scripts/preprocess_meshes.py`) so the cap is graspable by the Panda gripper.
-  Success = cap angle past a threshold.
+  rotates about the vertical axis on a hinge joint. The bottle is kept at full CAD
+  size (cap Ø~0.135 m). The cap mesh has 8 radial tabs/handles at its brim (modelled
+  in collision); the cap is turned by **non-prehensile** manipulation — the closed
+  gripper is placed in a valley and pushes one tab around. Success = cap angle past
+  a threshold.
 
 ```bash
 python scripts/preprocess_meshes.py                      # generate bottle part meshes (once)

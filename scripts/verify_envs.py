@@ -105,9 +105,9 @@ def main():
         "FrankaDrawerOpen",
         obs_key="drawer_slide",
         addr_attr="slide_qpos_addr",
-        threshold=0.10,
+        threshold=0.18,
         below=0.0,
-        above=0.15,
+        above=0.28,
     )
     check(
         "FrankaBottleUntwist",

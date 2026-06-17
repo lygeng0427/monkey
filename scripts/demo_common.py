@@ -116,6 +116,20 @@ class Recorder:
             self.env.render()
         return self.obs
 
+    def servo(self, target, gripper, rot=None, gain=20.0, max_step=1.0):
+        """Take ONE step servoing the eef toward an absolute world ``target`` xyz.
+
+        Useful for trajectories whose target is computed each step (e.g. sweeping
+        the hand along an arc), where ``reach``'s ``pos_fn() + offset`` form does
+        not fit. Records the transition like ``step``.
+        """
+        action = np.zeros(self.env.action_dim, dtype=np.float32)
+        action[:3] = np.clip((np.asarray(target) - self.eef_pos) * gain, -max_step, max_step)
+        if rot is not None:
+            action[3:6] = rot
+        action[-1] = gripper
+        return self.step(action)
+
     def reach(self, pos_fn, offset, gripper, n_steps, rot=None, gain=20.0, max_step=1.0):
         """Servo the eef toward ``pos_fn() + offset`` for ``n_steps`` steps.
 

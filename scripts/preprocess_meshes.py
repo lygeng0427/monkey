@@ -2,10 +2,15 @@
 """Generate articulated part meshes from the preprocessed CAD meshes.
 
 The uploaded bottle (``bottle_visual_m.stl``) is a single STL but is made of two
-disconnected components: the bottle body and a wide flat cap brim. This script
-splits those two components and rescales the whole bottle uniformly so the cap
-rim becomes pinch-graspable by the Panda gripper (~0.08 m opening). The raw cap
-(diameter ~0.135 m) and body (~0.090 m) are far too large to grasp at CAD scale.
+disconnected components: the bottle body and a cap with 8 flat radial tabs/handles
+at its brim. This script splits those two components and rescales the whole bottle
+uniformly by ``--scale``.
+
+The cap is turned by *non-prehensile* manipulation: the closed gripper is placed
+in a valley between two tabs and pushes one tab tangentially to spin the cap. That
+does not require the cap to fit the gripper, so the bottle is kept at (near) full
+CAD size (scale ~1.0: cap Ø~0.135 m, body Ø~0.090 m) to make the tabs large enough
+to push reliably and easy to see.
 
 Outputs (consumed by assets/objects/bottle_articulated.xml):
     assets/meshes/bottle_body_m.stl
@@ -38,8 +43,9 @@ import trimesh
 ROOT = Path(__file__).resolve().parents[1]
 MESH_DIR = ROOT / "assets" / "meshes"
 
-# Default uniform scale: cap 0.135 m -> ~0.061 m, body 0.090 m -> ~0.041 m.
-DEFAULT_SCALE = 0.45
+# Default uniform scale. 1.0 = full CAD size (cap Ø~0.135 m, body Ø~0.090 m), large
+# enough for non-prehensile tab pushing.
+DEFAULT_SCALE = 1.0
 
 
 def _radius(mesh: trimesh.Trimesh) -> float:
@@ -87,14 +93,6 @@ def main() -> None:
             f"{name:4s} -> {path.name}: faces={len(m.faces)} "
             f"diameter~{2 * _radius(m):.4f} m  z=[{m.bounds[0, 2]:.4f}, {m.bounds[1, 2]:.4f}]  bounds={b}"
         )
-
-    cap_d = 2 * _radius(cap)
-    if cap_d > 0.078:
-        print(
-            f"WARNING: cap diameter {cap_d:.4f} m is close to / above the "
-            f"~0.08 m gripper opening; consider a smaller --scale."
-        )
-
 
 if __name__ == "__main__":
     main()

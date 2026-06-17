@@ -2,15 +2,16 @@
   <!--
     Articulated bottle task object for the "untwist the cap" task.
 
-    Built from the rescaled part meshes produced by scripts/preprocess_meshes.py
-    (the raw CAD body Ø0.090 / cap Ø0.135 are too large for the Panda gripper, so
-    the whole bottle is scaled ~0.45x -> body Ø~0.041, cap Ø~0.061).
+    Built from the part meshes produced by scripts/preprocess_meshes.py (full CAD
+    size, scale 1.0: body Ø~0.090 m, cap Ø~0.135 m). The cap is turned by
+    NON-PREHENSILE manipulation: a closed gripper is placed in a valley between two
+    of the cap's tabs and pushes one tab tangentially, so the cap is kept large
+    (not shrunk to fit the gripper) to make the tabs easy to push and see.
 
     Local frame: z=0 is the bottle bottom (rests on the table), xy-centered. The
     body is static (welded to world); the cap rotates about the vertical z-axis on
-    a hinge. The cap collision proxy sits in a small gap ABOVE the body collision
-    proxy so they never touch: the cap is held in place by the hinge alone, which
-    keeps the cap free to spin (no rotational jamming against the body).
+    a hinge. The cap collision sits in a small gap ABOVE the body collision so they
+    never touch: the cap is held by the hinge alone, free to spin (no jamming).
   -->
   <asset>
     <mesh name="bottle_body_mesh" file="../meshes/bottle_body_m.stl"/>
@@ -28,7 +29,7 @@
         <body name="body">
           <geom name="body_visual" type="mesh" mesh="bottle_body_mesh" material="bottle_mat"
                 contype="0" conaffinity="0" group="1"/>
-          <geom name="body_collision" type="cylinder" pos="0 0 0.0095" size="0.0203 0.0095"
+          <geom name="body_collision" type="cylinder" pos="0 0 0.020" size="0.045 0.020"
                 rgba="0.1 0.1 0.1 0" density="500" friction="1 0.01 0.001"
                 solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
         </body>
@@ -40,19 +41,48 @@
 
           <geom name="cap_visual" type="mesh" mesh="bottle_cap_mesh" material="cap_mat"
                 contype="0" conaffinity="0" group="1"/>
-          <!-- Thin disk collision for the cap brim; bottom (z=0.0193) is just above the
-               body collision top (z=0.0190) so the two proxies never contact. -->
-          <geom name="cap_collision" type="cylinder" pos="0 0 0.0215" size="0.0304 0.0022"
+
+          <!-- Collision that matches the CAD cap shape: a central core disk plus 8 FLAT
+               radial tabs/handles at the brim (the cap mesh already has these tabs -
+               tips reach r~0.068, valleys r~0.050). Modelling them (instead of a smooth
+               cylinder) leaves real gaps between tabs, so the closed gripper can sit in a
+               valley and push a single tab. Flat (thin in z), radial, at brim height
+               z in [0.041, 0.051] - NOT upright nubs. Bottom (0.041) is just above the
+               body collision top (0.040). -->
+          <!-- Small central core only (r=0.030, < body r=0.045). Kept small so the
+               valleys between tabs are open: the closed gripper can drop down BESIDE a
+               tab (resting on the body top) and push the tab's side, instead of being
+               held up on a wide disk and skating over the tab tops. -->
+          <geom name="cap_core" type="cylinder" pos="0 0 0.046" size="0.030 0.005"
                 rgba="0.1 0.1 0.1 0" density="200" friction="2 0.05 0.001"
                 solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
+          <geom name="cap_petal_0" type="box" pos="0.0590 0.0000 0.046" euler="0 0 0.0000"   size="0.010 0.008 0.005"
+                rgba="0.1 0.1 0.1 0" density="200" friction="2 0.05 0.001" solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
+          <geom name="cap_petal_1" type="box" pos="0.0417 0.0417 0.046" euler="0 0 0.7854"   size="0.010 0.008 0.005"
+                rgba="0.1 0.1 0.1 0" density="200" friction="2 0.05 0.001" solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
+          <geom name="cap_petal_2" type="box" pos="0.0000 0.0590 0.046" euler="0 0 1.5708"   size="0.010 0.008 0.005"
+                rgba="0.1 0.1 0.1 0" density="200" friction="2 0.05 0.001" solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
+          <geom name="cap_petal_3" type="box" pos="-0.0417 0.0417 0.046" euler="0 0 2.3562"  size="0.010 0.008 0.005"
+                rgba="0.1 0.1 0.1 0" density="200" friction="2 0.05 0.001" solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
+          <geom name="cap_petal_4" type="box" pos="-0.0590 0.0000 0.046" euler="0 0 3.1416"  size="0.010 0.008 0.005"
+                rgba="0.1 0.1 0.1 0" density="200" friction="2 0.05 0.001" solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
+          <geom name="cap_petal_5" type="box" pos="-0.0417 -0.0417 0.046" euler="0 0 3.9270" size="0.010 0.008 0.005"
+                rgba="0.1 0.1 0.1 0" density="200" friction="2 0.05 0.001" solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
+          <geom name="cap_petal_6" type="box" pos="0.0000 -0.0590 0.046" euler="0 0 4.7124"  size="0.010 0.008 0.005"
+                rgba="0.1 0.1 0.1 0" density="200" friction="2 0.05 0.001" solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
+          <geom name="cap_petal_7" type="box" pos="0.0417 -0.0417 0.046" euler="0 0 5.4978"  size="0.010 0.008 0.005"
+                rgba="0.1 0.1 0.1 0" density="200" friction="2 0.05 0.001" solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
 
-          <site name="cap_site" pos="0 0 0.0215" size="0.006" rgba="0 1 0 0.3"/>
+          <!-- Center reference, and a reference at one tab (petal_0, +x) that rotates with
+               the cap, used to aim the push at a single tab. -->
+          <site name="cap_site" pos="0 0 0.046" size="0.008" rgba="0 1 0 0.3"/>
+          <site name="tab_site" pos="0.0590 0 0.046" size="0.007" rgba="1 0 0 0.4"/>
         </body>
       </body>
 
       <site name="bottom_site"            pos="0 0 0"      size="0.005" rgba="0 0 0 0"/>
-      <site name="top_site"               pos="0 0 0.024"  size="0.005" rgba="0 0 0 0"/>
-      <site name="horizontal_radius_site" pos="0.035 0 0.012" size="0.005" rgba="0 0 0 0"/>
+      <site name="top_site"               pos="0 0 0.052"  size="0.005" rgba="0 0 0 0"/>
+      <site name="horizontal_radius_site" pos="0.075 0 0.046" size="0.005" rgba="0 0 0 0"/>
     </body>
   </worldbody>
 </mujoco>
