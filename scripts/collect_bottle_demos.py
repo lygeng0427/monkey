@@ -50,8 +50,8 @@ DESCEND_STEPS = 120       # steps to drive the hand down into the valley beside 
 MAX_PUSH_STEPS = 340      # cap on the push
 
 
-def generate_episode(env, render=False, noise_scale=0.0):
-    rec = Recorder(env, render=render)
+def generate_episode(env, render=False, noise_scale=0.0, frame_cb=None):
+    rec = Recorder(env, render=render, frame_cb=frame_cb)
     sim = env.sim
 
     c = np.array(sim.data.site_xpos[env.cap_site_id])   # cap center (fixed; only the cap spins)

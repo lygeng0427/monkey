@@ -95,12 +95,18 @@ class Recorder:
     (robomimic convention), so states[i] + actions[i] -> states[i+1].
     """
 
-    def __init__(self, env, render=False):
+    def __init__(self, env, render=False, frame_cb=None):
         self.env = env
         self.render = render
+        # Optional callable invoked after every env.step (and once at reset) with
+        # no args -- used by scripts/record_bottle_video.py to grab an offscreen
+        # frame per step, so the recorded video matches the demo trajectory exactly.
+        self.frame_cb = frame_cb
         self.states = []
         self.actions = []
         self.obs = env.reset()
+        if self.frame_cb is not None:
+            self.frame_cb()
 
     @property
     def eef_pos(self):
@@ -114,6 +120,8 @@ class Recorder:
         self.obs = out[0]
         if self.render:
             self.env.render()
+        if self.frame_cb is not None:
+            self.frame_cb()
         return self.obs
 
     def servo(self, target, gripper, rot=None, gain=20.0, max_step=1.0):
