@@ -48,6 +48,13 @@ def step_env(env, action):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--env",
+        type=str,
+        default="FrankaDrawerBottleScene",
+        choices=["FrankaDrawerBottleScene", "FrankaDrawerOpen", "FrankaBottleUntwist"],
+        help="Which registered environment to launch.",
+    )
     parser.add_argument("--steps", type=int, default=10000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--renderer", type=str, default="mjviewer", choices=["mjviewer", "mujoco"])
@@ -59,7 +66,7 @@ def main():
     controller_config = load_basic_osc_controller()
 
     env = suite.make(
-        env_name="FrankaDrawerBottleScene",
+        env_name=args.env,
         robots="Panda",
         gripper_types="default",
         controller_configs=controller_config,

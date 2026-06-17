@@ -1,0 +1,58 @@
+<mujoco model="bottle_articulated_object">
+  <!--
+    Articulated bottle task object for the "untwist the cap" task.
+
+    Built from the rescaled part meshes produced by scripts/preprocess_meshes.py
+    (the raw CAD body Ø0.090 / cap Ø0.135 are too large for the Panda gripper, so
+    the whole bottle is scaled ~0.45x -> body Ø~0.041, cap Ø~0.061).
+
+    Local frame: z=0 is the bottle bottom (rests on the table), xy-centered. The
+    body is static (welded to world); the cap rotates about the vertical z-axis on
+    a hinge. The cap collision proxy sits in a small gap ABOVE the body collision
+    proxy so they never touch: the cap is held in place by the hinge alone, which
+    keeps the cap free to spin (no rotational jamming against the body).
+  -->
+  <asset>
+    <mesh name="bottle_body_mesh" file="../meshes/bottle_body_m.stl"/>
+    <mesh name="bottle_cap_mesh"  file="../meshes/bottle_cap_m.stl"/>
+    <material name="bottle_mat" rgba="0.10 0.35 0.90 1" specular="0.35" shininess="0.4"/>
+    <material name="cap_mat"    rgba="0.90 0.50 0.10 1" specular="0.40" shininess="0.5"/>
+  </asset>
+
+  <worldbody>
+    <body>
+      <body name="object">
+        <!-- Static bottle body (no joint => welded to world).
+             NB: geom names must NOT start with the object name ("bottle"), or
+             robosuite 1.5.x double-prefixes them and crashes. -->
+        <body name="body">
+          <geom name="body_visual" type="mesh" mesh="bottle_body_mesh" material="bottle_mat"
+                contype="0" conaffinity="0" group="1"/>
+          <geom name="body_collision" type="cylinder" pos="0 0 0.0095" size="0.0203 0.0095"
+                rgba="0.1 0.1 0.1 0" density="500" friction="1 0.01 0.001"
+                solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
+        </body>
+
+        <!-- Rotating cap on a hinge about z (axis through the centered origin). -->
+        <body name="cap">
+          <joint name="cap_joint" type="hinge" axis="0 0 1" pos="0 0 0"
+                 range="0 6.5" limited="true" damping="0.02" frictionloss="0.01" armature="0.001"/>
+
+          <geom name="cap_visual" type="mesh" mesh="bottle_cap_mesh" material="cap_mat"
+                contype="0" conaffinity="0" group="1"/>
+          <!-- Thin disk collision for the cap brim; bottom (z=0.0193) is just above the
+               body collision top (z=0.0190) so the two proxies never contact. -->
+          <geom name="cap_collision" type="cylinder" pos="0 0 0.0215" size="0.0304 0.0022"
+                rgba="0.1 0.1 0.1 0" density="200" friction="2 0.05 0.001"
+                solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
+
+          <site name="cap_site" pos="0 0 0.0215" size="0.006" rgba="0 1 0 0.3"/>
+        </body>
+      </body>
+
+      <site name="bottom_site"            pos="0 0 0"      size="0.005" rgba="0 0 0 0"/>
+      <site name="top_site"               pos="0 0 0.024"  size="0.005" rgba="0 0 0 0"/>
+      <site name="horizontal_radius_site" pos="0.035 0 0.012" size="0.005" rgba="0 0 0 0"/>
+    </body>
+  </worldbody>
+</mujoco>
