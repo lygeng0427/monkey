@@ -20,13 +20,14 @@ from .utils import ASSET_ROOT, find_name
 class BottleArticulatedObject(MujocoXMLObject):
     """Bottle body + cap. The cap hinge joint is declared in the XML."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, scale=None):
         super().__init__(
             fname=str(ASSET_ROOT / "objects" / "bottle_articulated.xml"),
             name=name,
             joints=None,  # joints are declared inside the XML
             obj_type="all",
             duplicate_collision_geoms=False,
+            scale=scale,  # robosuite scales geom size/pos, mesh scale, body pos, sites
         )
 
 
@@ -53,6 +54,7 @@ class FrankaBottleUntwist(ManipulationEnv):
         reward_shaping=False,
         success_thresh=np.pi / 2.0,
         placement_xy=(0.10, 0.0),
+        object_scale=1.0,
         has_renderer=False,
         has_offscreen_renderer=True,
         render_camera="frontview",
@@ -79,6 +81,9 @@ class FrankaBottleUntwist(ManipulationEnv):
         self.reward_scale = reward_scale
         self.reward_shaping = reward_shaping
         self.use_object_obs = use_object_obs
+        self.object_scale = float(object_scale)
+        # Success is a cap *angle*, which is size-invariant, so the threshold does
+        # NOT scale with object_scale (unlike the drawer's displacement threshold).
         self.success_thresh = success_thresh
         self.placement_xy = np.array(placement_xy, dtype=float)
 
@@ -125,7 +130,12 @@ class FrankaBottleUntwist(ManipulationEnv):
         )
         mujoco_arena.set_origin([0, 0, 0])
 
-        self.bottle = BottleArticulatedObject(name="bottle")
+        self.bottle = BottleArticulatedObject(
+            name="bottle", scale=(self.object_scale if self.object_scale != 1.0 else None)
+        )
+        # The bottle scales about its base (z=0), so it stays resting on the table
+        # at any size; only the cap height grows (the cap_site is read live by the
+        # scripted pusher, so the push adapts automatically).
         self.bottle.set_pos(
             [self.placement_xy[0], self.placement_xy[1], float(self.table_offset[2] + 0.001)]
         )

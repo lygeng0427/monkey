@@ -44,11 +44,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import robosuite.utils.transform_utils as T
 
 import franka_drawer_bottle  # noqa: F401  (registers FrankaDrawerOpen)
-from scripts.demo_common import Recorder, collect
+from scripts.demo_common import Recorder, collect, collect_grid, grid_positions
 
 ENV_NAME = "FrankaDrawerOpen"
 HORIZON = 1500
 CONTROL_FREQ = 20
+NOMINAL_XY = (0.05, 0.0)  # FrankaDrawerOpen default placement
 
 PITCH = -45.0         # grasp tilt (deg) from top-down toward horizontal, about world y
 BACKOFF = 0.13        # pre-grasp standoff along -approach (m)
@@ -73,6 +74,12 @@ def generate_episode(env, render=False, noise_scale=0.0, frame_cb=None):
     rec = Recorder(env, render=render, frame_cb=frame_cb)
     sim = env.sim
 
+    # The standoff/seat/clearance offsets are tuned to the handle+body geometry, so
+    # they scale with the object. The handle WORLD height is held fixed across sizes
+    # (see drawer_env._load_model), so the orientation/pull are size-independent.
+    s = float(getattr(env, "object_scale", 1.0))
+    backoff, seat_fwd, grasp_xbias = BACKOFF * s, SEAT_FWD * s, GRASP_XBIAS * s
+
     handle_id = env.handle_site_id
     handle_pos = lambda: np.array(sim.data.site_xpos[handle_id])
     jitter = np.random.normal(scale=noise_scale, size=3)
@@ -83,7 +90,7 @@ def generate_episode(env, render=False, noise_scale=0.0, frame_cb=None):
     target_mat = _rot_y(np.deg2rad(PITCH)) @ _rot_z(np.deg2rad(90.0)) @ base_mat
     target_quat = T.mat2quat(target_mat)
     approach = target_mat[:, 2]  # gripper approach axis in world frame (forward-down)
-    xbias = np.array([GRASP_XBIAS, 0.0, 0.0])  # forward (-x) seat bias, clear of the body
+    xbias = np.array([grasp_xbias, 0.0, 0.0])  # forward (-x) seat bias, clear of the body
 
     def ori_err():
         cq = np.asarray(rec.obs["robot0_eef_quat"])
@@ -96,13 +103,13 @@ def generate_episode(env, render=False, noise_scale=0.0, frame_cb=None):
     #    The jitter perturbs only the APPROACH start (so the demo isn't a single
     #    canned path); the seat below converges onto the true bar.
     for _ in range(110):
-        step_to(handle_pos() + jitter - BACKOFF * approach + xbias, gripper=-1.0)
+        step_to(handle_pos() + jitter - backoff * approach + xbias, gripper=-1.0)
     # 2) seat: advance along +approach onto the true bar so it sits between the pads
     for _ in range(90):
-        step_to(handle_pos() + SEAT_FWD * approach + xbias, gripper=-1.0)
+        step_to(handle_pos() + seat_fwd * approach + xbias, gripper=-1.0)
     # 3) close across the bar
     for _ in range(45):
-        step_to(handle_pos() + SEAT_FWD * approach + xbias, gripper=1.0)
+        step_to(handle_pos() + seat_fwd * approach + xbias, gripper=1.0)
     # 4) pull toward the robot (-x) until the drawer is open, holding the tilt
     for _ in range(320):
         if env._check_success():
@@ -120,11 +127,38 @@ def main():
     p.add_argument("--render", action="store_true")
     p.add_argument("--noise-scale", type=float, default=0.0, help="Std of per-episode approach jitter (m).")
     p.add_argument("--keep-failures", action="store_true")
+    p.add_argument("--object-scale", type=float, default=1.0, help="Drawer size multiplier (1.0 = baseline).")
+    p.add_argument("--px", type=float, default=None, help="Object placement x (default: env default).")
+    p.add_argument("--py", type=float, default=None, help="Object placement y (default: env default).")
+    # Grid sweep over the SEEN configs (size x position); per-demo attrs record each.
+    p.add_argument("--grid", action="store_true", help="Sweep --sizes x a position grid instead of a single config.")
+    p.add_argument("--sizes", type=float, nargs="+", default=[0.85, 1.0, 1.15], help="object_scale values for --grid.")
+    p.add_argument("--per-config", type=int, default=5, help="Demos per (size,position) config for --grid.")
+    p.add_argument("--extent", type=float, default=0.05, help="Half-width of the xy position grid (m).")
+    p.add_argument("--grid-n", type=int, default=3, help="Grid points per axis (grid-n^2 positions).")
     args = p.parse_args()
 
+    episode_fn = lambda env, render: generate_episode(env, render=render, noise_scale=args.noise_scale)
+
+    if args.grid:
+        collect_grid(
+            env_name=ENV_NAME,
+            generate_episode_fn=episode_fn,
+            out=args.out,
+            sizes=args.sizes,
+            positions=grid_positions(NOMINAL_XY, extent=args.extent, n=args.grid_n),
+            per_config=args.per_config,
+            seed=args.seed,
+            keep_failures=args.keep_failures,
+            control_freq=CONTROL_FREQ,
+            horizon=HORIZON,
+        )
+        return
+
+    placement_xy = None if (args.px is None and args.py is None) else (args.px or 0.0, args.py or 0.0)
     collect(
         env_name=ENV_NAME,
-        generate_episode_fn=lambda env, render: generate_episode(env, render=render, noise_scale=args.noise_scale),
+        generate_episode_fn=episode_fn,
         out=args.out,
         n=args.n,
         seed=args.seed,
@@ -132,6 +166,8 @@ def main():
         keep_failures=args.keep_failures,
         control_freq=CONTROL_FREQ,
         horizon=HORIZON,
+        object_scale=args.object_scale,
+        placement_xy=placement_xy,
     )
 
 

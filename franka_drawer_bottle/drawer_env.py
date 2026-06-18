@@ -20,13 +20,14 @@ from .utils import ASSET_ROOT, find_name
 class DrawerArticulatedObject(MujocoXMLObject):
     """Cabinet + sliding drawer. The slide joint is declared in the XML."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, scale=None):
         super().__init__(
             fname=str(ASSET_ROOT / "objects" / "drawer_articulated.xml"),
             name=name,
             joints=None,  # joints are declared inside the XML
             obj_type="all",
             duplicate_collision_geoms=False,
+            scale=scale,  # robosuite scales geom size/pos, mesh scale, body pos, sites
         )
 
 
@@ -36,6 +37,11 @@ class FrankaDrawerOpen(ManipulationEnv):
     Reward (when ``reward_shaping``): a reaching term toward the handle plus an
     opening term proportional to slide displacement; a sparse 1.0 on success.
     """
+
+    # Object-local z of handle_site at object_scale=1.0: tray body pos z (0.018) +
+    # handle_site local z (0.064). Scales linearly with object_scale; used to hold the
+    # handle's world height fixed across sizes (see _load_model).
+    _HANDLE_LOCAL_Z = 0.082
 
     def __init__(
         self,
@@ -53,6 +59,7 @@ class FrankaDrawerOpen(ManipulationEnv):
         reward_shaping=False,
         success_thresh=0.18,
         placement_xy=(0.05, 0.0),
+        object_scale=1.0,
         has_renderer=False,
         has_offscreen_renderer=True,
         render_camera="frontview",
@@ -79,7 +86,11 @@ class FrankaDrawerOpen(ManipulationEnv):
         self.reward_scale = reward_scale
         self.reward_shaping = reward_shaping
         self.use_object_obs = use_object_obs
-        self.success_thresh = success_thresh
+        self.object_scale = float(object_scale)
+        # Success is slide *displacement*, so it scales with object size (the whole
+        # drawer/handle grow uniformly). The slide joint range (0.32) is unscaled, so
+        # keep success_thresh * scale comfortably below it (0.18*1.15=0.207 < 0.32).
+        self.success_thresh = float(success_thresh) * self.object_scale
         self.placement_xy = np.array(placement_xy, dtype=float)
 
         super().__init__(
@@ -125,17 +136,23 @@ class FrankaDrawerOpen(ManipulationEnv):
         )
         mujoco_arena.set_origin([0, 0, 0])
 
-        self.drawer = DrawerArticulatedObject(name="drawer")
+        self.drawer = DrawerArticulatedObject(
+            name="drawer", scale=(self.object_scale if self.object_scale != 1.0 else None)
+        )
         # Rotate so the +y opening/handle faces the robot (local +y -> world -x).
         self.drawer.set_euler([0.0, 0.0, np.pi / 2.0])
         # The object is welded to the world (no joint on the object body), so place
-        # it 0.27 m above the table and it simply FLOATS there with nothing below it.
-        # That puts the handle at world z~1.15, where the Panda can hold a ~45 deg
-        # tilted grasp. (A pedestal under it is purely cosmetic and was removed; a
-        # tall table does not work -- it traps the gripper under the raised surface.)
-        self.drawer.set_pos(
-            [self.placement_xy[0], self.placement_xy[1], float(self.table_offset[2] + 0.27 + 0.001)]
-        )
+        # it ABOVE the table and it simply FLOATS there with nothing below it. The
+        # whole object scales about its base (z=0), so the handle's object-local
+        # height is HANDLE_LOCAL_Z * object_scale. We pick the placement z so the
+        # handle's WORLD z stays at the reachable height (~1.15) the ~45 deg tilted
+        # grasp is tuned for, REGARDLESS of size -- scaling the 0.27 offset instead
+        # would push the handle out of reach at the size extremes.
+        # (A pedestal under it is purely cosmetic and was removed; a tall table does
+        # not work -- it traps the gripper under the raised surface.)
+        handle_world_z = self.table_offset[2] + 0.271 + self._HANDLE_LOCAL_Z
+        drawer_z = handle_world_z - self._HANDLE_LOCAL_Z * self.object_scale
+        self.drawer.set_pos([self.placement_xy[0], self.placement_xy[1], float(drawer_z)])
 
         self.model = ManipulationTask(
             mujoco_arena=mujoco_arena,
@@ -203,6 +220,46 @@ class FrankaDrawerOpen(ManipulationEnv):
         # Start closed.
         self.sim.data.qpos[self.slide_qpos_addr] = 0.0
         self.sim.forward()
+        self._aim_agentview_topdown()
+
+    # ------------------------------------------------------------------ cameras
+    def _aim_agentview_topdown(self):
+        """Repoint 'agentview' to look straight DOWN at the handle.
+
+        The drawer's opening/handle faces the robot (world -x), while the default
+        TableArena agentview sits on the +x side and only sees the cabinet's closed
+        back wall. A top-down camera over the handle shows the loop handle, the
+        gripper, and the -x slide clearly. We read the live handle xpos so the view
+        auto-tracks placement_xy and object_scale; the drawer slides within frame.
+        """
+        try:
+            cid = self.sim.model.camera_name2id("agentview")
+        except Exception:
+            return  # no agentview camera in this model build; nothing to do
+        h = self._handle_xpos
+        eye = np.array([h[0], h[1], h[2] + 0.47])
+        self.sim.model.cam_pos[cid] = eye
+        self.sim.model.cam_quat[cid] = self._lookat_quat_wxyz(eye, h, up=(1.0, 0.0, 0.0))
+
+    @staticmethod
+    def _lookat_quat_wxyz(eye, target, up=(0.0, 0.0, 1.0)):
+        """MuJoCo camera quat (wxyz) so the camera at ``eye`` looks at ``target``.
+
+        MuJoCo cameras view along -z of the camera frame, +y up. ``up`` is the world
+        direction that should map to image-up (use +x for a top-down view).
+        """
+        import robosuite.utils.transform_utils as T
+
+        eye = np.asarray(eye, float)
+        fwd = np.asarray(target, float) - eye
+        fwd /= np.linalg.norm(fwd)
+        cam_z = -fwd
+        cam_x = np.cross(np.asarray(up, float), cam_z)
+        cam_x /= np.linalg.norm(cam_x)
+        cam_y = np.cross(cam_z, cam_x)
+        R = np.stack([cam_x, cam_y, cam_z], axis=1)
+        q = T.mat2quat(R)  # xyzw
+        return np.array([q[3], q[0], q[1], q[2]])  # wxyz
 
     def reward(self, action=None):
         if self._check_success():

@@ -35,10 +35,11 @@ def load_controller_config():
         return load_controller_config(default_controller="OSC_POSE")
 
 
-def make_env(env_name, render=False, control_freq=20, horizon=1000):
+def make_env(env_name, render=False, control_freq=20, horizon=1000,
+             object_scale=1.0, placement_xy=None):
     import robosuite as suite
 
-    return suite.make(
+    kwargs = dict(
         env_name=env_name,
         robots="Panda",
         gripper_types="default",
@@ -55,7 +56,12 @@ def make_env(env_name, render=False, control_freq=20, horizon=1000):
         horizon=horizon,
         ignore_done=True,
         hard_reset=False,
+        object_scale=object_scale,
     )
+    # placement_xy left None -> keep each env's own default (drawer/bottle differ).
+    if placement_xy is not None:
+        kwargs["placement_xy"] = tuple(placement_xy)
+    return suite.make(**kwargs)
 
 
 def get_model_xml(env):
@@ -66,22 +72,27 @@ def get_model_xml(env):
     raise RuntimeError("Could not get MuJoCo XML string from env.")
 
 
-def get_env_args(env, env_name, control_freq=20, horizon=1000):
+def get_env_args(env, env_name, control_freq=20, horizon=1000,
+                 object_scale=1.0, placement_xy=None):
     """Minimal robomimic-style env metadata (enough to reconstruct the env)."""
+    env_kwargs = {
+        "robots": "Panda",
+        "gripper_types": "default",
+        "controller_configs": load_controller_config(),
+        "use_camera_obs": False,
+        "has_renderer": False,
+        "has_offscreen_renderer": False,
+        "control_freq": control_freq,
+        "horizon": horizon,
+        "ignore_done": True,
+        "object_scale": object_scale,
+    }
+    if placement_xy is not None:
+        env_kwargs["placement_xy"] = tuple(placement_xy)
     return {
         "env_name": env_name,
         "type": 1,  # robosuite-type env in robomimic conventions
-        "env_kwargs": {
-            "robots": "Panda",
-            "gripper_types": "default",
-            "controller_configs": load_controller_config(),
-            "use_camera_obs": False,
-            "has_renderer": False,
-            "has_offscreen_renderer": False,
-            "control_freq": control_freq,
-            "horizon": horizon,
-            "ignore_done": True,
-        },
+        "env_kwargs": env_kwargs,
     }
 
 
@@ -229,6 +240,12 @@ def save_hdf5(path, episodes, env_args):
             demo_grp = data_grp.create_group(f"demo_{i}")
             demo_grp.attrs["num_samples"] = n
             demo_grp.attrs["model_file"] = ep["model_file"]
+            # Per-demo config so training/eval can filter by size & position. The
+            # model_file already encodes the *scaled* geometry for offline rendering.
+            if "object_scale" in ep:
+                demo_grp.attrs["object_scale"] = float(ep["object_scale"])
+            if "placement_xy" in ep:
+                demo_grp.attrs["placement_xy"] = np.asarray(ep["placement_xy"], dtype=np.float64)
             demo_grp.create_dataset("states", data=ep["states"], compression="gzip")
             demo_grp.create_dataset("actions", data=ep["actions"], compression="gzip")
             demo_grp.create_dataset("final_state", data=ep["final_state"])
@@ -244,17 +261,71 @@ def save_hdf5(path, episodes, env_args):
     print(f"Saved {len(episodes)} demos, {total} samples to {path}")
 
 
+def grid_positions(nominal, extent=0.05, n=3):
+    """A square grid of n*n placements: nominal +/- extent in x and y (n=1 -> nominal)."""
+    offs = np.array([0.0]) if n == 1 else np.linspace(-extent, extent, n)
+    return [(float(nominal[0] + dx), float(nominal[1] + dy)) for dx in offs for dy in offs]
+
+
+def collect_grid(env_name, generate_episode_fn, out, sizes, positions, per_config,
+                 seed, keep_failures, control_freq=20, horizon=1000):
+    """Sweep a (size x position) grid, building a FRESH env per config.
+
+    A fresh env per config sidesteps the hard_reset=False re-placement pitfall (the
+    object only moves/re-scales when the model is rebuilt). Every demo carries its
+    own object_scale/placement_xy (per-demo HDF5 attrs) and its scaled model_file,
+    so the combined dataset is self-describing for training/eval and offline render.
+    """
+    episodes = []
+    env_args = None
+    n_total = n_success = 0
+    for s in sizes:
+        for xy in positions:
+            env = make_env(env_name, render=False, control_freq=control_freq, horizon=horizon,
+                           object_scale=s, placement_xy=xy)
+            if env_args is None:  # representative; per-demo attrs/model_file are authoritative
+                env_args = get_env_args(env, env_name, control_freq=control_freq, horizon=horizon,
+                                        object_scale=s, placement_xy=xy)
+            actual_xy = tuple(float(v) for v in env.placement_xy)
+            cfg_succ = 0
+            for i in range(per_config):
+                np.random.seed(seed + i)
+                ep = generate_episode_fn(env, render=False)
+                ep["object_scale"] = float(s)
+                ep["placement_xy"] = actual_xy
+                n_total += 1
+                if ep["success"]:
+                    n_success += 1
+                    cfg_succ += 1
+                    episodes.append(ep)
+                elif keep_failures:
+                    episodes.append(ep)
+            print(f"  scale={s:<4} xy={actual_xy} : {cfg_succ}/{per_config}")
+            env.close()
+
+    print(f"Grid: {n_success}/{n_total} successes across {len(sizes)*len(positions)} configs")
+    if not episodes:
+        raise RuntimeError("No episodes to save. Re-run a single config with --render to debug.")
+    save_hdf5(out, episodes, env_args)
+
+
 def collect(env_name, generate_episode_fn, out, n, seed, render, keep_failures,
-            control_freq=20, horizon=1000):
+            control_freq=20, horizon=1000, object_scale=1.0, placement_xy=None):
     """Shared CLI driver: run generate_episode_fn n times and save successes."""
-    env = make_env(env_name, render=render, control_freq=control_freq, horizon=horizon)
-    env_args = get_env_args(env, env_name, control_freq=control_freq, horizon=horizon)
+    env = make_env(env_name, render=render, control_freq=control_freq, horizon=horizon,
+                   object_scale=object_scale, placement_xy=placement_xy)
+    env_args = get_env_args(env, env_name, control_freq=control_freq, horizon=horizon,
+                            object_scale=object_scale, placement_xy=placement_xy)
+    # The actual placement may be the env's own default when placement_xy was None.
+    actual_xy = tuple(float(v) for v in env.placement_xy)
 
     episodes = []
     n_success = 0
     for i in range(n):
         np.random.seed(seed + i)
         ep = generate_episode_fn(env, render=render)
+        ep["object_scale"] = float(object_scale)
+        ep["placement_xy"] = actual_xy
         if ep["success"]:
             n_success += 1
             episodes.append(ep)

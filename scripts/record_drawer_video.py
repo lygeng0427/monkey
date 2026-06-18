@@ -35,9 +35,9 @@ from scripts.collect_drawer_demos import CONTROL_FREQ, ENV_NAME, HORIZON, genera
 from scripts.demo_common import load_controller_config
 
 
-def make_render_env(camera, width, height, control_freq, horizon):
+def make_render_env(camera, width, height, control_freq, horizon, object_scale=1.0, placement_xy=None):
     """Drawer env with an offscreen renderer (camera obs off; we call sim.render)."""
-    return suite.make(
+    kwargs = dict(
         env_name=ENV_NAME,
         robots="Panda",
         gripper_types="default",
@@ -55,7 +55,11 @@ def make_render_env(camera, width, height, control_freq, horizon):
         ignore_done=True,
         hard_reset=False,
         initialization_noise=None,  # reproducible: match the collector's start pose
+        object_scale=object_scale,
     )
+    if placement_xy is not None:
+        kwargs["placement_xy"] = tuple(placement_xy)
+    return suite.make(**kwargs)
 
 
 def write_mp4_ffmpeg(path, frames, fps):
@@ -93,11 +97,16 @@ def main():
     p.add_argument("--fps", type=int, default=20)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--noise-scale", type=float, default=0.0)
+    p.add_argument("--object-scale", type=float, default=1.0, help="Drawer size multiplier.")
+    p.add_argument("--px", type=float, default=None, help="Object placement x (default: env default).")
+    p.add_argument("--py", type=float, default=None, help="Object placement y (default: env default).")
     args = p.parse_args()
     if args.out is None:
         args.out = f"videos/drawer_open_{args.camera}.mp4"
 
-    env = make_render_env(args.camera, args.width, args.height, CONTROL_FREQ, HORIZON)
+    placement_xy = None if (args.px is None and args.py is None) else (args.px or 0.0, args.py or 0.0)
+    env = make_render_env(args.camera, args.width, args.height, CONTROL_FREQ, HORIZON,
+                          object_scale=args.object_scale, placement_xy=placement_xy)
     np.random.seed(args.seed)
 
     frames = []

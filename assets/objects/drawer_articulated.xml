@@ -55,10 +55,14 @@
                 material="cabinet_mat" friction="1 0.01 0.001" group="0"/>
           <geom name="cab_back"   type="box" pos="0 -0.113 0.080"  size="0.096 0.008 0.064"
                 material="cabinet_mat" friction="1 0.01 0.001" group="0"/>
-          <!-- Top ends at the drawer body front (local y ~+0.056) so it does NOT
-               overhang the protruding loop handle (local y 0.056..0.095); an
-               overhanging lip would block a top-down grasp of the handle. -->
-          <geom name="cab_top"    type="box" pos="0 -0.0245 0.152"  size="0.096 0.0805 0.008"
+          <!-- Top is pulled BACK to local-y front edge ~+0.031 (pos y -0.0495), well
+               behind the protruding loop handle. The whole object scales about its
+               base while the env pins the handle at a fixed world z, so the cab-top->
+               handle clearance is ~0.070*scale and SHRINKS at small size; the fixed-
+               size gripper then catches this lip (the drawer failed to seat at
+               object_scale 0.85 until the lip was pulled back ~0.02). Validated 0.85/
+               1.0/1.15 all seat with the lip here (scripts/pilot_collect.py). -->
+          <geom name="cab_top"    type="box" pos="0 -0.0495 0.152"  size="0.096 0.0805 0.008"
                 material="cabinet_mat" friction="1 0.01 0.001" group="0"/>
 
           <!-- Visual twins (rendered; no collision). -->
@@ -70,7 +74,7 @@
                 material="cabinet_mat" contype="0" conaffinity="0" group="1"/>
           <geom name="cab_back_visual"   type="box" pos="0 -0.113 0.080"  size="0.096 0.008 0.064"
                 material="cabinet_mat" contype="0" conaffinity="0" group="1"/>
-          <geom name="cab_top_visual"    type="box" pos="0 -0.0245 0.152"  size="0.096 0.0805 0.008"
+          <geom name="cab_top_visual"    type="box" pos="0 -0.0495 0.152"  size="0.096 0.0805 0.008"
                 material="cabinet_mat" contype="0" conaffinity="0" group="1"/>
         </body>
 
@@ -101,7 +105,11 @@
                world +x (the pull axis), slips this bar into its finger slot, clamps
                vertically (fingers along z), and pulls -x. Invisible (rgba alpha 0);
                the CAD mesh provides the visible handle. -->
-          <geom name="handle_bar" type="cylinder" fromto="-0.026 0.090 0.064 0.026 0.090 0.064" size="0.012"
+          <!-- Cylinder along local x, written in pos+euler form (NOT fromto): robosuite's
+               MujocoXMLObject.set_scale scales geom size/pos but NOT fromto, so a fromto
+               bar would stay put while the visual mesh + handle_site scale away from it.
+               pos="0 0.090 0.064", half-length 0.026, radius 0.012, axis rotated z->x. -->
+          <geom name="handle_bar" type="cylinder" pos="0 0.090 0.064" euler="0 1.5708 0" size="0.012 0.026"
                 rgba="0.2 0.2 0.2 0" density="200" friction="4 0.1 0.001"
                 solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
 
