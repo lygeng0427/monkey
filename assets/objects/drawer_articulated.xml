@@ -16,6 +16,12 @@
     Local frame: z=0 is the cabinet bottom (rests on the table). The drawer opens
     along +y (the front / handle face). The environment rotates the whole object
     (set_euler) so this +y opening faces the robot.
+
+    The static cabinet has BOTH collision geoms (group="0") and visual twin geoms
+    (group="1", contype/conaffinity=0). robosuite renders with
+    render_collision_mesh=False, which hides group 0, so the cabinet needs the
+    group-1 twins to be visible. Without them the cabinet is invisible and the
+    drawer looks like it slides out into empty space (nothing staying put).
   -->
   <asset>
     <mesh name="drawer_mesh" file="../meshes/drawer_visual_m.stl" scale="2 2 2"/>
@@ -27,7 +33,10 @@
   <worldbody>
     <body>
       <body name="object">
-        <!-- Static cabinet frame (no joint => welded to world). Open on +y. -->
+        <!-- Static cabinet frame (no joint => welded to world). Open on +y.
+             Each wall is a group="0" collision box plus a group="1" visual twin
+             (same pos/size/material, contype/conaffinity=0) so the cabinet is
+             actually drawn (render_collision_mesh=False hides group 0). -->
         <body name="frame">
           <geom name="cab_bottom" type="box" pos="0 0 0.008"        size="0.096 0.105 0.008"
                 material="cabinet_mat" friction="1 0.01 0.001" group="0"/>
@@ -37,33 +46,53 @@
                 material="cabinet_mat" friction="1 0.01 0.001" group="0"/>
           <geom name="cab_back"   type="box" pos="0 -0.113 0.080"  size="0.096 0.008 0.064"
                 material="cabinet_mat" friction="1 0.01 0.001" group="0"/>
-          <geom name="cab_top"    type="box" pos="0 -0.005 0.152"  size="0.096 0.100 0.008"
+          <!-- Top ends at the drawer body front (local y ~+0.056) so it does NOT
+               overhang the protruding loop handle (local y 0.056..0.095); an
+               overhanging lip would block a top-down grasp of the handle. -->
+          <geom name="cab_top"    type="box" pos="0 -0.0245 0.152"  size="0.096 0.0805 0.008"
                 material="cabinet_mat" friction="1 0.01 0.001" group="0"/>
+
+          <!-- Visual twins (rendered; no collision). -->
+          <geom name="cab_bottom_visual" type="box" pos="0 0 0.008"        size="0.096 0.105 0.008"
+                material="cabinet_mat" contype="0" conaffinity="0" group="1"/>
+          <geom name="cab_left_visual"   type="box" pos="-0.088 -0.005 0.080" size="0.008 0.100 0.064"
+                material="cabinet_mat" contype="0" conaffinity="0" group="1"/>
+          <geom name="cab_right_visual"  type="box" pos="0.088 -0.005 0.080"  size="0.008 0.100 0.064"
+                material="cabinet_mat" contype="0" conaffinity="0" group="1"/>
+          <geom name="cab_back_visual"   type="box" pos="0 -0.113 0.080"  size="0.096 0.008 0.064"
+                material="cabinet_mat" contype="0" conaffinity="0" group="1"/>
+          <geom name="cab_top_visual"    type="box" pos="0 -0.0245 0.152"  size="0.096 0.0805 0.008"
+                material="cabinet_mat" contype="0" conaffinity="0" group="1"/>
         </body>
 
-        <!-- Sliding drawer: CAD mesh (visual) + box collision + added grasp handle.
-             NB: geom/body names must NOT start with the object name ("drawer"), or
-             robosuite 1.5.x double-prefixes them (drawer_ + drawer_... ) and crashes. -->
+        <!-- Sliding drawer: CAD mesh (visual) + collision proxies. The CAD already
+             has a real bag-style LOOP handle on the front (+y) face (an arch at
+             mid-height, hole opening vertically; front bar at local y~0.090, z~0.064,
+             spanning local x ~+/-0.026). We grasp that real handle; NO extra handle
+             is added. NB: geom/body names must NOT start with the object name
+             ("drawer"), or robosuite 1.5.x double-prefixes them and crashes. -->
         <body name="tray" pos="0 0 0.018">
           <joint name="slide" type="slide" axis="0 1 0" pos="0 0 0"
-                 range="0 0.32" limited="true" damping="2" frictionloss="1" armature="0.02"/>
+                 range="0 0.32" limited="true" damping="0.5" frictionloss="0.1" armature="0.02"/>
 
           <geom name="tray_visual" type="mesh" mesh="drawer_mesh" material="drawer_mat"
                 contype="0" conaffinity="0" group="1"/>
-          <geom name="tray_collision" type="box" pos="0 0 0.060" size="0.068 0.092 0.058"
+          <!-- Body collision: covers the solid block only (local y -0.095..+0.056),
+               STOPPING before the loop handle so the gripper can get around the bar. -->
+          <geom name="tray_collision" type="box" pos="0 -0.019 0.060" size="0.068 0.0755 0.058"
                 rgba="0.2 0.2 0.2 0" density="200" friction="1 0.01 0.001"
                 solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
 
-          <!-- Added graspable D-handle protruding from the front (+y) face (not in CAD). -->
-          <geom name="handle_post_l" type="box" pos="-0.028 0.102 0.064" size="0.008 0.008 0.012"
-                material="handle_mat" friction="1 0.01 0.001" group="1"/>
-          <geom name="handle_post_r" type="box" pos="0.028 0.102 0.064"  size="0.008 0.008 0.012"
-                material="handle_mat" friction="1 0.01 0.001" group="1"/>
-          <geom name="handle" type="cylinder" fromto="-0.036 0.116 0.064 0.036 0.116 0.064" size="0.010"
-                material="handle_mat" friction="2 0.05 0.001"
-                solimp="0.998 0.998 0.001" solref="0.002 1" group="1"/>
+          <!-- Collision for the CAD loop's FRONT BAR (the graspable part): a thin slab
+               matching the mesh bar, with grip friction. The gripper approaches along
+               world +x (the pull axis), slips this bar into its finger slot, clamps
+               vertically (fingers along z), and pulls -x. Invisible (rgba alpha 0);
+               the CAD mesh provides the visible handle. -->
+          <geom name="handle_bar" type="cylinder" fromto="-0.026 0.090 0.064 0.026 0.090 0.064" size="0.012"
+                rgba="0.2 0.2 0.2 0" density="200" friction="4 0.1 0.001"
+                solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
 
-          <site name="handle_site" pos="0 0.116 0.064" size="0.012" rgba="1 0 0 0.3"/>
+          <site name="handle_site" pos="0 0.090 0.064" size="0.012" rgba="1 0 0 0.3"/>
         </body>
       </body>
 

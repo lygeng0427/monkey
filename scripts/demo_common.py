@@ -43,6 +43,9 @@ def make_env(env_name, render=False, control_freq=20, horizon=1000):
         robots="Panda",
         gripper_types="default",
         controller_configs=load_controller_config(),
+        # No arm start-pose randomization: scripted demos must be reproducible for a
+        # given seed (otherwise tuned grasp offsets drift run-to-run).
+        initialization_noise=None,
         has_renderer=render,
         has_offscreen_renderer=False,
         render_visual_mesh=True,
