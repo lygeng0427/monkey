@@ -2,24 +2,29 @@
 """Collect scripted FrankaDrawerOpen demonstrations.
 
 We grasp the drawer's REAL CAD handle -- a bag-style loop on the front face whose
-graspable front bar runs along world y (the env yaws the object 90 deg). The
-trajectory is a top-down cross-bar grasp, then a pull toward the robot along -x:
+graspable front bar runs along world y (the env yaws the object 90 deg). The grasp
+is TILTED ~45 deg between top-down and horizontal (the "in-between" grasp): the
+gripper points forward-and-down (approach axis ~[0.7, 0, -0.7]) and pulls toward
+the robot along -x.
 
-    1. move above the handle bar (gripper open) while yawing the gripper so its
-       finger-closing axis aligns with world +x (ACROSS the bar) -- one finger
-       ends in front of the bar, one drops into the loop hole behind it
-    2. descend so the bar seats DEEP between the pads
-    3. close across the bar
+Why tilted and not pure top-down or pure horizontal: the cabinet sits on a 0.27 m
+pedestal (see drawer_articulated.xml) so the handle is at z~1.15. At that height
+the Panda wrist can hold a clean 45 deg grasp (pos err <1 cm, orientation exact);
+a *fully* horizontal grasp is still infeasible (the wrist can only point horizontal
+with the arm fully extended upward, ~0.6 m from the handle), and a top-down grasp
+grazes the drawer body. 45 deg is the most-horizontal pose reachable at the handle.
+
+Trajectory (orientation held by a full-quaternion servo to a fixed tilted target
+every step):
+
+    1. pre-grasp: hold the tilted pose, backed off along -approach from the bar
+    2. seat: advance along +approach so the bar sits between the finger pads
+    3. close across the bar (fingers close in the x-z plane => across the y bar)
     4. pull along -x (the drawer opens toward the robot) until success
 
-The gripper yaw is held by a closed-loop orientation servo every step: the
-finger-closing direction is measured from the two finger pads and a rotation
-delta about the base/vertical z-axis (action[3:6]) is commanded to drive that
-direction onto world +x. The grasp is centered slightly FORWARD of the bar
-(GRASP_XOFF) so the rear finger drops into the loop hole rather than onto the
-drawer body / cabinet; the descend seats below the bar center (GRASP_DZ) -- a
-shallow grasp catches only the bar top and slips. (The cabinet top is pulled
-back off the handle in the XML so it doesn't block this top-down approach.)
+The target orientation is pitch -45 deg (toward horizontal, about world y) applied
+to the top-down across-the-bar pose (yaw 90 deg about world z); see
+scripts/probe_tilt_grasp.py for the reachability/grip-axis check.
 
 Saves a robomimic-style HDF5. Run from the project root:
 
@@ -36,6 +41,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import robosuite.utils.transform_utils as T
+
 import franka_drawer_bottle  # noqa: F401  (registers FrankaDrawerOpen)
 from scripts.demo_common import Recorder, collect
 
@@ -43,25 +50,23 @@ ENV_NAME = "FrankaDrawerOpen"
 HORIZON = 1500
 CONTROL_FREQ = 20
 
-GRASP_XOFF = -0.035   # grasp centered this far in front (-x) of the bar, so the rear
-                      # finger drops into the loop hole, not onto the drawer/cabinet
-GRASP_DZ = -0.020     # descend eef this far below the bar center (deep seat)
-PULL_DZ = -0.005      # pull slightly downward too, wedging the bar against the lower
-                      # finger so the round bar can't pop out of the (pull-axis) pinch
+PITCH = -45.0         # grasp tilt (deg) from top-down toward horizontal, about world y
+BACKOFF = 0.13        # pre-grasp standoff along -approach (m)
+SEAT_FWD = 0.012      # advance past the bar center along +approach to seat deep (m)
+GRASP_XBIAS = -0.016  # seat this far toward the robot (world -x) of the bar center, so
+                      # the lower (forward) finger descends in the clear corridor in
+                      # FRONT of the bar instead of catching on the drawer body top
+PULL_DX = -0.05       # per-step pull toward the robot (drawer slides world -x)
 
 
-def _find_pad_geom_ids(sim):
-    """Resolve the two gripper finger-pad geom ids (names are robosuite-prefixed)."""
-    ids = {}
-    for gn in sim.model.geom_names:
-        low = gn.lower()
-        if "finger1_pad" in low:
-            ids[1] = sim.model.geom_name2id(gn)
-        elif "finger2_pad" in low:
-            ids[2] = sim.model.geom_name2id(gn)
-    if 1 not in ids or 2 not in ids:
-        raise RuntimeError(f"Could not find finger pad geoms in {sim.model.geom_names}")
-    return ids[1], ids[2]
+def _rot_y(t):
+    c, s = np.cos(t), np.sin(t)
+    return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+
+
+def _rot_z(t):
+    c, s = np.cos(t), np.sin(t)
+    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
 
 
 def generate_episode(env, render=False, noise_scale=0.0, frame_cb=None):
@@ -70,39 +75,39 @@ def generate_episode(env, render=False, noise_scale=0.0, frame_cb=None):
 
     handle_id = env.handle_site_id
     handle_pos = lambda: np.array(sim.data.site_xpos[handle_id])
-    # Small fixed lateral offset per episode (np.random already seeded by caller).
     jitter = np.random.normal(scale=noise_scale, size=3)
 
-    pad1, pad2 = _find_pad_geom_ids(sim)
+    # Fixed tilted target orientation: pitch toward horizontal (world y) on top of
+    # the across-the-bar yaw (world z), relative to the reset (top-down) pose.
+    base_mat = T.quat2mat(np.asarray(rec.obs["robot0_eef_quat"]))
+    target_mat = _rot_y(np.deg2rad(PITCH)) @ _rot_z(np.deg2rad(90.0)) @ base_mat
+    target_quat = T.mat2quat(target_mat)
+    approach = target_mat[:, 2]  # gripper approach axis in world frame (forward-down)
+    xbias = np.array([GRASP_XBIAS, 0.0, 0.0])  # forward (-x) seat bias, clear of the body
 
-    def yaw_rot():
-        """Rotation delta (axis-angle about base z) to align the finger-closing
-        axis with world +x. The handle bar runs along world y, so closing across
-        it (along x) is the proper drawer grip. The closing axis is bidirectional,
-        so we drive its angle to the nearest of 0 / pi."""
-        cdir = np.array(sim.data.geom_xpos[pad2]) - np.array(sim.data.geom_xpos[pad1])
-        ang = np.arctan2(cdir[1], cdir[0])              # current closing-axis angle (xy)
-        err = np.arctan2(np.sin(-2.0 * ang), np.cos(-2.0 * ang)) / 2.0  # -> 0 or pi
-        return np.array([0.0, 0.0, float(np.clip(3.0 * err, -1.0, 1.0))])
+    def ori_err():
+        cq = np.asarray(rec.obs["robot0_eef_quat"])
+        return np.clip(T.get_orientation_error(target_quat, cq) * 3.0, -1.0, 1.0)
 
     def step_to(target, gripper):
-        rec.servo(target, gripper=gripper, rot=yaw_rot())
+        rec.servo(target, gripper=gripper, rot=ori_err())
 
-    # 1) above the handle bar, gripper open, rotating to grasp across the bar
-    for _ in range(70):
-        step_to(handle_pos() + jitter + [GRASP_XOFF, 0.0, 0.10], gripper=-1.0)
-    # 2) descend so the bar seats deep between the pads (front finger ahead of the
-    #    bar, rear finger into the loop hole).
-    for _ in range(100):
-        step_to(handle_pos() + jitter + [GRASP_XOFF, 0.0, GRASP_DZ], gripper=-1.0)
+    # 1) pre-grasp: settle the tilted pose, backed off along -approach from the bar.
+    #    The jitter perturbs only the APPROACH start (so the demo isn't a single
+    #    canned path); the seat below converges onto the true bar.
+    for _ in range(110):
+        step_to(handle_pos() + jitter - BACKOFF * approach + xbias, gripper=-1.0)
+    # 2) seat: advance along +approach onto the true bar so it sits between the pads
+    for _ in range(90):
+        step_to(handle_pos() + SEAT_FWD * approach + xbias, gripper=-1.0)
     # 3) close across the bar
     for _ in range(45):
-        step_to(handle_pos() + [GRASP_XOFF, 0.0, GRASP_DZ], gripper=1.0)
-    # 4) pull toward the robot (-x), slightly downward, until the drawer is open
+        step_to(handle_pos() + SEAT_FWD * approach + xbias, gripper=1.0)
+    # 4) pull toward the robot (-x) until the drawer is open, holding the tilt
     for _ in range(320):
         if env._check_success():
             break
-        step_to(rec.eef_pos + np.array([-0.04, 0.0, PULL_DZ]), gripper=1.0)
+        step_to(rec.eef_pos + np.array([PULL_DX, 0.0, 0.0]), gripper=1.0)
 
     return rec.episode(success=env._check_success())
 

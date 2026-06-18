@@ -128,8 +128,13 @@ class FrankaDrawerOpen(ManipulationEnv):
         self.drawer = DrawerArticulatedObject(name="drawer")
         # Rotate so the +y opening/handle faces the robot (local +y -> world -x).
         self.drawer.set_euler([0.0, 0.0, np.pi / 2.0])
+        # The object is welded to the world (no joint on the object body), so place
+        # it 0.27 m above the table and it simply FLOATS there with nothing below it.
+        # That puts the handle at world z~1.15, where the Panda can hold a ~45 deg
+        # tilted grasp. (A pedestal under it is purely cosmetic and was removed; a
+        # tall table does not work -- it traps the gripper under the raised surface.)
         self.drawer.set_pos(
-            [self.placement_xy[0], self.placement_xy[1], float(self.table_offset[2] + 0.001)]
+            [self.placement_xy[0], self.placement_xy[1], float(self.table_offset[2] + 0.27 + 0.001)]
         )
 
         self.model = ManipulationTask(

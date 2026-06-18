@@ -13,9 +13,18 @@
     where the gripper grasps. Raw CAD drawer is 0.070 x 0.095 x 0.060 m -> 2x is
     0.140 x 0.190 x 0.120 m.
 
-    Local frame: z=0 is the cabinet bottom (rests on the table). The drawer opens
-    along +y (the front / handle face). The environment rotates the whole object
-    (set_euler) so this +y opening faces the robot.
+    Local frame: z=0 is the cabinet bottom. The whole object is welded to the world
+    (the `object`/`frame` body has no joint), so it stays FIXED wherever it is
+    placed and needs no physical support. The env places it ~0.27 m above the table
+    so the handle sits at world z~1.15, where the Panda wrist can hold a ~45 deg
+    "between top-down and horizontal" grasp cleanly (at a table-height handle, z~0.88,
+    the wrist can only point horizontal with the arm fully extended up, ~0.6 m away).
+    The cabinet simply FLOATS at that height with nothing below it (a pedestal/riser
+    was tried but is purely cosmetic and was removed as unwanted; a tall table does
+    not work because raising the work surface to z~1.07 traps the gripper (reset
+    z~1.01) under the tabletop). The drawer opens along +y (the front / handle face).
+    The environment rotates the whole object (set_euler) so this +y opening faces the
+    robot.
 
     The static cabinet has BOTH collision geoms (group="0") and visual twin geoms
     (group="1", contype/conaffinity=0). robosuite renders with
@@ -77,9 +86,13 @@
 
           <geom name="tray_visual" type="mesh" mesh="drawer_mesh" material="drawer_mat"
                 contype="0" conaffinity="0" group="1"/>
-          <!-- Body collision: covers the solid block only (local y -0.095..+0.056),
-               STOPPING before the loop handle so the gripper can get around the bar. -->
-          <geom name="tray_collision" type="box" pos="0 -0.019 0.060" size="0.068 0.0755 0.058"
+          <!-- Body collision: a LOW slab covering only the bottom of the drawer block
+               (local y -0.095..+0.056), topping out BELOW the handle bar (tray-local
+               z top ~0.045 vs bar at z~0.064) so the tilted gripper descending onto
+               the bar does not graze / catch on the block top. The drawer is on a
+               1-DOF slide joint (height fixed), so a short collision still keeps it
+               seated; the upper block is visual-only (tray_visual). -->
+          <geom name="tray_collision" type="box" pos="0 -0.019 0.0235" size="0.068 0.0755 0.0215"
                 rgba="0.2 0.2 0.2 0" density="200" friction="1 0.01 0.001"
                 solimp="0.998 0.998 0.001" solref="0.002 1" group="0"/>
 
