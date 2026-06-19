@@ -268,17 +268,24 @@ def grid_positions(nominal, extent=0.05, n=3):
 
 
 def collect_grid(env_name, generate_episode_fn, out, sizes, positions, per_config,
-                 seed, keep_failures, control_freq=20, horizon=1000):
+                 seed, keep_failures, control_freq=20, horizon=1000, max_attempt_factor=3):
     """Sweep a (size x position) grid, building a FRESH env per config.
 
     A fresh env per config sidesteps the hard_reset=False re-placement pitfall (the
     object only moves/re-scales when the model is rebuilt). Every demo carries its
     own object_scale/placement_xy (per-demo HDF5 attrs) and its scaled model_file,
     so the combined dataset is self-describing for training/eval and offline render.
+
+    Retry-to-target: with action noise some scripted demos fail, so each config is
+    attempted until it accumulates ``per_config`` successes (each attempt re-seeded so
+    it draws fresh noise), capped at ``per_config * max_attempt_factor`` attempts. This
+    keeps the per-config count balanced under noise; at noise 0 success is ~100% so the
+    attempt count collapses back to per_config (same as before).
     """
     episodes = []
     env_args = None
     n_total = n_success = 0
+    under = []
     for s in sizes:
         for xy in positions:
             env = make_env(env_name, render=False, control_freq=control_freq, horizon=horizon,
@@ -287,23 +294,31 @@ def collect_grid(env_name, generate_episode_fn, out, sizes, positions, per_confi
                 env_args = get_env_args(env, env_name, control_freq=control_freq, horizon=horizon,
                                         object_scale=s, placement_xy=xy)
             actual_xy = tuple(float(v) for v in env.placement_xy)
-            cfg_succ = 0
-            for i in range(per_config):
-                np.random.seed(seed + i)
+            cfg_succ = attempt = 0
+            max_attempts = per_config * max_attempt_factor
+            while cfg_succ < per_config and attempt < max_attempts:
+                np.random.seed(seed + attempt)  # fresh noise draw per attempt (incl. retries)
                 ep = generate_episode_fn(env, render=False)
                 ep["object_scale"] = float(s)
                 ep["placement_xy"] = actual_xy
                 n_total += 1
+                attempt += 1
                 if ep["success"]:
                     n_success += 1
                     cfg_succ += 1
                     episodes.append(ep)
                 elif keep_failures:
                     episodes.append(ep)
-            print(f"  scale={s:<4} xy={actual_xy} : {cfg_succ}/{per_config}")
+            tag = "" if cfg_succ == per_config else f"  <-- UNDER TARGET ({max_attempts} attempts)"
+            if cfg_succ < per_config:
+                under.append((s, actual_xy, cfg_succ))
+            print(f"  scale={s:<4} xy={actual_xy} : {cfg_succ}/{per_config} (in {attempt} attempts){tag}")
             env.close()
 
-    print(f"Grid: {n_success}/{n_total} successes across {len(sizes)*len(positions)} configs")
+    print(f"Grid: {n_success}/{n_total} successful attempts across {len(sizes)*len(positions)} configs")
+    if under:
+        print(f"WARNING: {len(under)} config(s) under target: " +
+              ", ".join(f"scale={s} xy={xy} ({c}/{per_config})" for s, xy, c in under))
     if not episodes:
         raise RuntimeError("No episodes to save. Re-run a single config with --render to debug.")
     save_hdf5(out, episodes, env_args)

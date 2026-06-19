@@ -9,10 +9,16 @@ sideview frames. This keeps the states HDF5 small and lets us re-render at any
 resolution / camera set later.
 
 Writes a new HDF5 mirroring the input layout, adding per demo:
-    data/demo_i/obs/agentview_image   uint8 (T, H, W, 3)
-    data/demo_i/obs/sideview_image    uint8 (T, H, W, 3)
+    data/demo_i/obs/agentview_image     uint8   (T, H, W, 3)
+    data/demo_i/obs/sideview_image      uint8   (T, H, W, 3)
+    data/demo_i/obs/robot0_eef_pos      float32 (T, 3)
+    data/demo_i/obs/robot0_eef_quat     float32 (T, 4)   xyzw (robosuite convention)
+    data/demo_i/obs/robot0_gripper_qpos float32 (T, 2)
 and carrying over states/actions/rewards/dones + attrs (object_scale, placement_xy,
-model_file). Needs an offscreen GL context:
+model_file). The proprio keys are the standard robomimic low-dim set; a diffusion
+policy conditions on image(s) + this proprioception. They are *positional* (read
+from the same sim state that produced the image), so they reproduce exactly from
+the stored states. Needs an offscreen GL context:
 
     MUJOCO_GL=egl python scripts/render_obs.py --in data/drawer.hdf5 --out data/drawer_img.hdf5
     MUJOCO_GL=egl python scripts/render_obs.py --in data/bottle.hdf5 --out data/bottle_img.hdf5 --size 84
@@ -34,6 +40,9 @@ import franka_drawer_bottle  # noqa: F401  (registers the envs)
 from scripts.demo_common import load_controller_config
 
 CAMERAS = ("agentview", "sideview")
+# Standard robomimic low-dim proprio set; a diffusion policy conditions on these
+# alongside the camera image(s). All positional, so they reproduce from the state.
+PROPRIO_KEYS = ("robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos")
 
 
 def make_render_env(env_name, cameras, size):
@@ -58,18 +67,26 @@ def make_render_env(env_name, cameras, size):
     )
 
 
-def render_demo(env, model_file, states, cameras, size):
+def render_demo(env, model_file, states, cameras, size, proprio_keys):
     # Rebuild the model so the object matches this demo's scaled geometry, then
     # replay states (model_file already encodes the size/position + drawer camera).
     env.reset_from_xml_string(model_file)
     frames = {cam: np.empty((len(states), size, size, 3), dtype=np.uint8) for cam in cameras}
+    proprio = {k: [] for k in proprio_keys}
     for t, s in enumerate(states):
         env.sim.set_state_from_flattened(np.asarray(s))
         env.sim.forward()
         for cam in cameras:
             img = env.sim.render(width=size, height=size, camera_name=cam)
             frames[cam][t] = np.flipud(img)  # MuJoCo renders bottom-up
-    return frames
+        if proprio_keys:
+            # Recompute observables from the current (just-set) sim state. These are
+            # positional proprio, so they match the state that produced the image.
+            obs = env._get_observations(force_update=True)
+            for k in proprio_keys:
+                proprio[k].append(np.asarray(obs[k], dtype=np.float32))
+    proprio = {k: np.stack(v) for k, v in proprio.items()}
+    return frames, proprio
 
 
 def main():
@@ -77,6 +94,8 @@ def main():
     p.add_argument("--in", dest="inp", required=True, help="Input states HDF5 (from a collector).")
     p.add_argument("--out", required=True, help="Output HDF5 with image observations added.")
     p.add_argument("--cameras", nargs="+", default=list(CAMERAS))
+    p.add_argument("--proprio", nargs="*", default=list(PROPRIO_KEYS),
+                   help="Proprio observable keys to store (empty list = none).")
     p.add_argument("--size", type=int, default=84, help="Square image side (px).")
     p.add_argument("--max-demos", type=int, default=None, help="Render only the first N demos (smoke test).")
     args = p.parse_args()
@@ -100,7 +119,9 @@ def main():
         for di, key in enumerate(demo_keys):
             din = fin["data"][key]
             states = din["states"][:]
-            frames = render_demo(env, din.attrs["model_file"], states, args.cameras, args.size)
+            frames, proprio = render_demo(
+                env, din.attrs["model_file"], states, args.cameras, args.size, args.proprio
+            )
 
             dout = dgrp.create_group(key)
             for ak, av in din.attrs.items():
@@ -112,7 +133,12 @@ def main():
                 dout.create_dataset("final_state", data=din["final_state"][:])
             ogrp = dout.create_group("obs")
             for cam in args.cameras:
-                ogrp.create_dataset(f"{cam}_image", data=frames[cam], compression="gzip")
+                # NO compression on the image datasets: gzip decompression per batch was
+                # the training data-loading bottleneck (~97% of epoch time). Uncompressed,
+                # the images load far faster (and fit in RAM with hdf5_cache_mode="all").
+                ogrp.create_dataset(f"{cam}_image", data=frames[cam])
+            for k, arr in proprio.items():
+                ogrp.create_dataset(k, data=arr, compression="gzip")
             total += states.shape[0]
             print(f"  [{di+1}/{len(demo_keys)}] {key}: {states.shape[0]} frames x {len(args.cameras)} cams")
         dgrp.attrs["total"] = total
