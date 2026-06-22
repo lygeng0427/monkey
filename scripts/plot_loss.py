@@ -24,9 +24,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 TASKS = ["drawer", "bottle"]
 
 
-def latest_tb_dir(task):
-    """Newest logs/tb dir for a task (handles multiple timestamped runs)."""
-    hits = glob.glob(str(REPO_ROOT / "runs" / f"diffusion_{task}" / "*" / "*" / "logs" / "tb"))
+def latest_tb_dir(task, tag=""):
+    """Newest logs/tb dir for a task (handles multiple timestamped runs). `tag` selects
+    a run family: "" -> runs/diffusion_<task>, "_h4" -> runs/diffusion_<task>_h4, etc."""
+    hits = glob.glob(str(REPO_ROOT / "runs" / f"diffusion_{task}{tag}" / "*" / "*" / "logs" / "tb"))
     if not hits:
         return None
     return max(hits, key=lambda p: Path(p).stat().st_mtime)
@@ -41,8 +42,8 @@ def load_scalars(tb_dir, tag):
     return [p.step for p in pts], [p.value for p in pts]
 
 
-def plot_task(task, ax):
-    tb = latest_tb_dir(task)
+def plot_task(task, ax, tag=""):
+    tb = latest_tb_dir(task, tag)
     if tb is None:
         ax.set_title(f"{task}: no logs yet")
         return
@@ -62,13 +63,14 @@ def plot_task(task, ax):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--task", choices=TASKS, default=None, help="One task (default: both).")
+    p.add_argument("--tag", default="", help="Run family suffix, e.g. '_h4' -> runs/diffusion_<task>_h4.")
     p.add_argument("--out", default=None)
     args = p.parse_args()
 
     tasks = [args.task] if args.task else TASKS
     fig, axes = plt.subplots(1, len(tasks), figsize=(6 * len(tasks), 4.5), squeeze=False)
     for ax, task in zip(axes[0], tasks):
-        plot_task(task, ax)
+        plot_task(task, ax, args.tag)
     fig.suptitle("Diffusion Policy training loss")
     fig.tight_layout()
 

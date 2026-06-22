@@ -52,7 +52,8 @@ def ensure_train_val_split(dataset_path, val_ratio, train_key="train", valid_key
 
 
 def build_config(task, data_path, output_dir, num_epochs, epoch_steps, batch_size,
-                 val_ratio, name, seed, num_workers, cache_mode="all"):
+                 val_ratio, name, seed, num_workers, cache_mode="all",
+                 obs_horizon=2, action_horizon=8, pred_horizon=16):
     from robomimic.config import config_factory
 
     # Start from the diffusion_policy defaults (correct encoder/horizon/ddpm), then
@@ -86,7 +87,18 @@ def build_config(task, data_path, output_dir, num_epochs, epoch_steps, batch_siz
         config.train.dataset_keys = ["actions", "rewards", "dones"]
         config.train.seed = seed
         config.train.cuda = True
-        # seq_length=16 / frame_stack=2 (= prediction / observation horizon) kept as template.
+
+        # --- diffusion horizons (template default To=2/Ta=8/Tp=16). Only To and Tp
+        # affect TRAINING: process_batch slices obs to `frame_stack`=To and actions to
+        # `seq_length`=Tp (action_horizon Ta is INFERENCE-only -- receding-horizon
+        # execution -- so it does not change the loss). Keep frame_stack==To and
+        # seq_length==Tp in lockstep with the algo horizons or the data loader and the
+        # net's global_cond_dim disagree.
+        config.algo.horizon.observation_horizon = obs_horizon
+        config.algo.horizon.action_horizon = action_horizon
+        config.algo.horizon.prediction_horizon = pred_horizon
+        config.train.frame_stack = obs_horizon
+        config.train.seq_length = pred_horizon
 
         # --- observation: two RGB cameras + proprio; ResNet18 + crop randomization
         config.observation.modalities.obs.rgb = list(RGB_KEYS)
@@ -114,12 +126,20 @@ def main():
                         "'low_dim' reads images from disk per batch (old, slow).")
     p.add_argument("--name", default=None)
     p.add_argument("--seed", type=int, default=1)
+    # Diffusion horizons. Defaults reproduce the original runs (To=2/Ta=8/Tp=16).
+    p.add_argument("--obs-horizon", type=int, default=2, help="To: stacked obs frames (=frame_stack).")
+    p.add_argument("--action-horizon", type=int, default=8, help="Ta: executed steps/replan (inference-only).")
+    p.add_argument("--pred-horizon", type=int, default=16, help="Tp: predicted action chunk (=seq_length).")
     args = p.parse_args()
 
     data_path = Path(args.data) if args.data else REPO_ROOT / "data" / f"{args.task}_img.hdf5"
     if not data_path.exists():
         raise FileNotFoundError(f"Dataset not found: {data_path} (run render_obs.py first).")
-    output_dir = Path(args.output) if args.output else REPO_ROOT / "runs" / f"diffusion_{args.task}"
+    # Resolve to ABSOLUTE: robomimic's get_exp_dir resolves a *relative* output_dir
+    # against the robomimic install dir (not CWD), so a relative --output would write
+    # checkpoints under site-packages and miss our repo runs/.
+    output_dir = (Path(args.output).resolve() if args.output
+                  else REPO_ROOT / "runs" / f"diffusion_{args.task}")
     name = args.name or f"diffusion_{args.task}"
 
     ensure_train_val_split(data_path, args.val_ratio)
@@ -130,11 +150,18 @@ def main():
     config = build_config(
         args.task, data_path, output_dir, args.num_epochs, args.epoch_steps,
         args.batch_size, args.val_ratio, name, args.seed, args.num_workers, args.cache_mode,
+        obs_horizon=args.obs_horizon, action_horizon=args.action_horizon, pred_horizon=args.pred_horizon,
     )
+    # Assert the 5 coupled horizon values actually propagated (a horizon change is a
+    # classic source of frame-stack shape mismatches at the first batch).
+    assert config.algo.horizon.observation_horizon == args.obs_horizon == config.train.frame_stack
+    assert config.algo.horizon.prediction_horizon == args.pred_horizon == config.train.seq_length
+    assert config.algo.horizon.action_horizon == args.action_horizon
     config.lock()
     device = TorchUtils.get_torch_device(try_to_use_cuda=config.train.cuda)
     print(f"[train] task={args.task} data={data_path} device={device} "
-          f"epochs={args.num_epochs}x{args.epoch_steps}steps batch={args.batch_size}")
+          f"epochs={args.num_epochs}x{args.epoch_steps}steps batch={args.batch_size} "
+          f"To={args.obs_horizon} Ta={args.action_horizon} Tp={args.pred_horizon}")
     train(config, device=device)
     print(f"[train] DONE. checkpoints under {output_dir}/{name}/")
 

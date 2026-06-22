@@ -53,6 +53,11 @@ LOWDIM_KEYS = ("robot0_eef_pos", "robot0_eef_quat", "robot0_gripper_qpos")
 # (10-50 s real time), so we speed it up with ONE universal rule: write at a fixed
 # VIDEO_FPS and SUBSAMPLE frames down to the time cap (success 5 s, failure 10 s).
 VIDEO_CAMERA = "sideview"   # side scene view (shows arm + drawer slide / bottle cap)
+# Cameras stitched (left->right) into each rollout mp4. Default = the single side
+# view (backward-compatible); --video-cameras overrides, e.g. "agentview,sideview"
+# for the drawer, whose handle/slide face the robot and are largely hidden in the
+# pure sideview. All listed cameras must be in CAMERAS (so they're already rendered).
+VIDEO_CAMERAS = [VIDEO_CAMERA]
 VIDEO_SIZE = 256            # render res for the mp4 (obs still rendered at 84 for the policy)
 VIDEO_FPS = 30
 SUCCESS_SEC, FAILURE_SEC = 5, 10
@@ -74,11 +79,12 @@ UNSEEN_SIZES = [0.925, 1.05, 1.10]
 UNSEEN_OFFSETS = [-0.04, 0.01, 0.04]
 # In-range corner offsets for the size x position (UNSEEN_BOTH) probe.
 UNSEEN_CORNERS = [(-0.04, -0.04), (0.04, 0.04), (0.04, -0.04)]
-# A FEW mild-EXTRAPOLATION configs JUST OUTSIDE the seen hull (sizes < 0.85 or > 1.15,
-# offsets beyond +/-0.05) -- to probe a little past the training boundary. Kept small so
-# the total unseen count stays well under 50.
-OOB_SIZES = [0.80, 1.20]    # just below / above the seen size range [0.85, 1.15]
-OOB_OFFSET = 0.075          # just beyond the seen position range +/-0.05
+# EXTRAPOLATION configs OUTSIDE the seen hull (sizes < 0.85 or > 1.15, offsets beyond
+# +/-0.05). Sized to MIRROR the 27 in-range unseen configs (9 size + 9 pos + 9 both) so
+# the OOB and in-boundary unseen sets are directly comparable.
+OOB_SIZES = [0.78, 1.20, 1.25]                  # 1 below 0.85, 2 above 1.15 (all OOB)
+OOB_OFFSETS = [-0.075, 0.075, 0.10]             # position offsets, all beyond +/-0.05
+OOB_CORNERS = [(-0.075, -0.075), (0.075, 0.075), (0.075, -0.075)]  # OOB size x OOB pos
 
 
 def build_configs(nominal_xy, categories):
@@ -107,15 +113,17 @@ def build_configs(nominal_xy, categories):
             for dx, dy in UNSEEN_CORNERS:
                 cfgs.append(dict(scale=s, xy=(nx + dx, ny + dy), category="UNSEEN_BOTH"))
     if "unseen-oob" in categories:
-        # Mild EXTRAPOLATION just outside the seen min-max boundary (8 configs).
-        for s in OOB_SIZES:                                  # size OOB, nominal position
-            cfgs.append(dict(scale=s, xy=(nx, ny), category="UNSEEN_OOB"))
-        for dx in (-OOB_OFFSET, OOB_OFFSET):                 # position OOB (x), seen size
-            cfgs.append(dict(scale=1.0, xy=(nx + dx, ny), category="UNSEEN_OOB"))
-        for dy in (-OOB_OFFSET, OOB_OFFSET):                 # position OOB (y), seen size
-            cfgs.append(dict(scale=1.0, xy=(nx, ny + dy), category="UNSEEN_OOB"))
-        for s in OOB_SIZES:                                  # size AND position OOB (corner)
-            cfgs.append(dict(scale=s, xy=(nx + OOB_OFFSET, ny + OOB_OFFSET), category="UNSEEN_OOB"))
+        # EXTRAPOLATION outside the seen hull, mirroring the 27 in-range unseen configs:
+        # 9 size-OOB + 9 position-OOB + 9 both-OOB = 27.
+        for s in OOB_SIZES:                                  # OOB size, in-range x-positions
+            for dx in SEEN_OFFSETS:
+                cfgs.append(dict(scale=s, xy=(nx + dx, ny), category="UNSEEN_OOB"))
+        for dx in OOB_OFFSETS:                               # OOB position (3x3), in-range size
+            for dy in OOB_OFFSETS:
+                cfgs.append(dict(scale=1.0, xy=(nx + dx, ny + dy), category="UNSEEN_OOB"))
+        for s in OOB_SIZES:                                  # OOB size AND OOB position (corners)
+            for dx, dy in OOB_CORNERS:
+                cfgs.append(dict(scale=s, xy=(nx + dx, ny + dy), category="UNSEEN_OOB"))
     return cfgs
 
 
@@ -214,9 +222,21 @@ def _stack_history(hist):
 
 
 def _video_frame(env):
-    """One upright RGB frame from the side camera (MuJoCo renders bottom-up)."""
-    img = env.sim.render(width=VIDEO_SIZE, height=VIDEO_SIZE, camera_name=VIDEO_CAMERA)
-    return np.flipud(img).copy()
+    """One upright RGB frame for the rollout mp4. Renders each camera in
+    VIDEO_CAMERAS (MuJoCo is bottom-up -> flipud) and stitches them left-to-right
+    with a thin divider, so a single clip can carry e.g. agentview + sideview."""
+    panels = []
+    for cam in VIDEO_CAMERAS:
+        img = np.flipud(env.sim.render(width=VIDEO_SIZE, height=VIDEO_SIZE,
+                                       camera_name=cam)).copy()
+        panels.append(img)
+    if len(panels) == 1:
+        return panels[0]
+    sep = np.full((panels[0].shape[0], 4, 3), 60, dtype=np.uint8)  # thin gray divider
+    stitched = [panels[0]]
+    for p in panels[1:]:
+        stitched += [sep, p]
+    return np.hstack(stitched)
 
 
 def _save_video(frames, path, max_seconds):
@@ -268,6 +288,9 @@ def main():
     p.add_argument("--video-dir", default=None,
                    help="Dir for per-config success/failure mp4s (default videos/eval/<task>).")
     p.add_argument("--no-videos", action="store_true", help="Disable saving demonstration videos.")
+    p.add_argument("--video-cameras", default=None,
+                   help="Comma list of cameras stitched L->R into each rollout mp4 "
+                        "(default 'sideview'; e.g. 'agentview,sideview'). Must be in CAMERAS.")
     p.add_argument("--max-horizon", type=int, default=None, help="Override per-task default.")
     p.add_argument("--init-noise-mag", type=float, default=0.02,
                    help="Arm-start joint noise magnitude for stochastic rollouts (0 = deterministic).")
@@ -281,6 +304,14 @@ def main():
     categories = [c.strip() for c in args.categories.split(",") if c.strip()]
     max_horizon = args.max_horizon or cfg["max_horizon"]
     init_noise = None if args.init_noise_mag <= 0 else {"magnitude": args.init_noise_mag, "type": "gaussian"}
+    if args.video_cameras:
+        global VIDEO_CAMERAS
+        cams = [c.strip() for c in args.video_cameras.split(",") if c.strip()]
+        bad = [c for c in cams if c not in CAMERAS]
+        if bad:
+            raise SystemExit(f"--video-cameras {bad} not in rendered CAMERAS={CAMERAS}")
+        VIDEO_CAMERAS = cams
+        print(f"[eval] rollout video cameras = {VIDEO_CAMERAS}")
     np.random.seed(args.seed)
 
     import torch  # noqa: F401
